@@ -1,0 +1,23 @@
+# Stack de monitoreo: Prometheus + Grafana + Pushgateway (kube-prometheus-stack)
+# Se instala con: observability/setup-observabilidad.sh
+
+grafana:
+  enabled: true
+  # Cambiar en un entorno real. Para el entorno simulado de la evaluacion alcanza.
+  adminPassword: admin
+  service:
+    type: LoadBalancer
+  # el sidecar importa automaticamente dashboards (label grafana_dashboard) y
+  # datasources (label grafana_datasource) desde ConfigMaps
+  sidecar:
+    dashboards:
+      enabled: true
+    datasources:
+      enabled: true
+
+# Pushgateway: recibe las metricas de CI/CD (tiempo de despliegue, cobertura)
+# que empuja GitHub Actions al terminar el pipeline.
+prometheus-pushgateway:
+  enabled: true
+  service:
+    type: LoadBalancer

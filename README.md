@@ -1,144 +1,246 @@
-# pagos-svc
+# pagos-svc — Observabilidad y entornos reales en DevOps (EP3)
 
-Microservicio de pagos construido con Spring Boot 3.3, Java 21 y Docker.
-Es el proyecto base de la asignatura Ingeniería DevOps (DOY0101) y la semilla del pipeline que trabajaremos en el semestre.
+Microservicio de pagos construido con **Spring Boot 3.3, Java 21 y Docker**. Este repositorio
+extiende el pipeline DevOps de las evaluaciones anteriores (EP1 y EP2) para incorporar
+**observabilidad, métricas, dashboards y cumplimiento automatizado**, desplegando en un entorno
+orquestado real (**Amazon EKS**).
 
-## Requisitos
+Asignatura: **Ingeniería DevOps (DOY0101)** · Evaluación Parcial N°3.
 
-- Docker (Desktop en Windows / Engine en Linux)
-- Git
+---
 
-## Puesta en marcha
+## 1. Arquitectura
+
+```mermaid
+flowchart LR
+    subgraph DEV[Desarrollo]
+      R[Repositorio GitHub] --> PR[Push / Pull Request]
+    end
+
+    PR --> CI{CI/CD<br/>GitHub Actions}
+
+    subgraph CI
+      P1[pruebas<br/>mvn verify + JaCoCo + SonarCloud]
+      P2[seguridad<br/>Snyk]
+      P3[construir<br/>imagen Docker -> GHCR]
+      P4[desplegar-eks<br/>kubectl apply]
+      P5[metricas<br/>Pushgateway]
+    end
+    P1 --> P3
+    P2 --> P3
+    P3 --> P4
+    P4 --> P5
+
+    subgraph AWS[Amazon EKS - Kubernetes]
+      SVC[pagos-svc<br/>2 replicas] --> PROM[Prometheus]
+      SVC --> LOKI[Loki + Promtail]
+      PROM --> GRAF[Grafana<br/>dashboard personalizado]
+      LOKI --> GRAF
+      P5 --> PG[Pushgateway]
+      PG --> PROM
+    end
+```
+
+### Flujo de datos de observabilidad
+
+1. El microservicio expone métricas en `/actuator/prometheus` (Micrometer + Prometheus).
+2. **Prometheus** raspa esas métricas cada 15 s (vía `ServiceMonitor`) y las guarda como series de tiempo.
+3. **Promtail** recolecta los logs de los contenedores y los envía a **Loki**.
+4. **Grafana** consulta Prometheus (métricas) y Loki (logs) para mostrar el **dashboard personalizado**.
+5. Al final del pipeline, GitHub Actions publica en el **Pushgateway** las métricas de CI/CD
+   (tiempo de despliegue, cobertura, estado, vulnerabilidades), que Prometheus también raspa.
+
+---
+
+## 2. Stack de herramientas
+
+| Capa | Herramienta | Indicador |
+| --- | --- | --- |
+| Monitoreo (métricas) | **Micrometer + Prometheus** | IE1 |
+| Logging | **Loki + Promtail** | IE1 |
+| Dashboard | **Grafana** (dashboard personalizado) | IE3 |
+| Orquestación | **Amazon EKS** (Kubernetes) | IE2 |
+| Métricas CI/CD | **Prometheus Pushgateway** | IE3 |
+| Calidad | **SonarCloud** (quality gate) | IE5 / IE6 |
+| Seguridad | **Snyk** (vulnerabilidades) | IE6 |
+| Cobertura | **JaCoCo** (100 %) | IE6 |
+| Auditoría | **scripts/auditoria.sh** | IE5 |
+
+---
+
+## 3. Requisitos previos
+
+- Cuenta de AWS con permisos para crear un cluster EKS.
+- `awscli`, `eksctl`, `kubectl` y `helm` instalados.
+- Cuenta de **SonarCloud** vinculada al repositorio (gratis para repos públicos).
+- Cuenta de **Snyk** con token.
+
+---
+
+## 4. Puesta en marcha
+
+### 4.1 Local (desarrollo rápido)
 
 ```bash
 docker compose up --build -d
 ```
 
-Se levantan 2 réplicas, una en el puerto 8080 y otra en el 8081.
+Levanta 2 réplicas (puertos 8080 y 8081). El endpoint de métricas queda en
+`http://localhost:8080/actuator/prometheus`.
 
-- Página de presentación: http://localhost:8080
-- Swagger UI: http://localhost:8080/swagger-ui/index.html
-- Consola H2: http://localhost:8080/h2-console
-- API REST: http://localhost:8080/api/pagos
-- Estado del servicio: http://localhost:8080/actuator/health
-
-## Pruebas locales
+### 4.2 Crear el cluster EKS
 
 ```bash
-mvn test    # unit tests
-mvn verify  # verifica cobertura JaCoCo (exige 100 %)
+cd infra
+./setup-eks.sh
 ```
 
-## Modelo de ramificación
+### 4.3 Desplegar el microservicio en EKS
 
-### Opciones que evalué
+```bash
+# reemplaza el tag por uno real publicado en GHCR
+sed -i "s/IMAGE_TAG_PLACEHOLDER/<sha>/g" k8s/deployment.yaml
+kubectl apply -f k8s/namespace.yaml
+kubectl apply -f k8s/deployment.yaml
+kubectl apply -f k8s/service.yaml
+kubectl apply -f k8s/service-monitor.yaml
+```
 
-| Modelo | Cómo funciona | Ideal para |
-| --- | --- | --- |
-| **GitFlow** | Ramas `main` + `develop` + `feature/` + `hotfix/` | Proyectos con releases planificadas y una rama de integración |
-| **GitHub Flow** | Solo `main` + `feature/` + pull request | Despliegue continuo simple y equipos pequeños |
-| **Trunk-based** | Una sola rama (`main`/`trunk`) + ramas de vida corta | Entrega continua, tronco inestable no permitido |
+> El `Deployment` usa la imagen de GHCR (`ghcr.io/lucasmerc20/ep02-devops`). Para que los nodos
+> puedan descargarla, haz público el paquete en *GitHub → Packages → Package settings → Change
+> visibility → Public*, o crea un `imagePullSecrets` llamado `ghcr-secret`.
 
-### Modelo elegido: GitFlow
+### 4.4 Instalar el stack de observabilidad
 
-Elegí **GitFlow** porque el curso se desarrolla durante todo el semestre y cada entrega (EP01, EP02, EP03) es un hito estable. La rama `develop` me permite integrar las features terminadas sin ensuciar `main`, y la rama `hotfix/` me deja corregir un bug en producción sin interrumpir el trabajo en desarrollo. Además, GitFlow separa claramente el código estable (`main`) del código en integración (`develop`), lo que da trazabilidad frente a lo que piden las rúbricas del curso.
+```bash
+cd observability
+./setup-observabilidad.sh
+```
 
-Este repositorio lo desarrollo de forma individual, así que mantengo la disciplina de ramas y pull requests aunque el flujo lo ejecute una sola persona.
+Esto instala (vía Helm) **kube-prometheus-stack** (Prometheus + Grafana + Pushgateway) y
+**loki-stack** (Loki + Promtail), registra el datasource de Loki y provisiona el dashboard
+personalizado en Grafana.
 
-### Estructura de ramas del proyecto
+### 4.5 Configurar secretos y variables en GitHub
 
-| Rama | Origen | Propósito | ¿Se borra? |
-| --- | --- | --- | --- |
-| `main` | inicial | Código estable, siempre listo para producción | No |
-| `develop` | main | Integración de features terminadas | No |
-| `feature/<nombre>` | develop | Un cambio de funcionalidad | Sí, al fusionarse |
-| `hotfix/<nombre>` | main | Corrección urgente de un bug en producción | Sí, al fusionarse |
+En *Settings → Secrets and variables → Actions*:
 
-Regla de naming: `feature/descripcion-corta` y `hotfix/descripcion-corta`, todo en minúsculas y separado por guiones (por ejemplo `feature/pagina-presentacion`).
+**Secrets:**
 
-## Convenciones y buenas prácticas
+| Nombre | Descripción |
+| --- | --- |
+| `SNYK_TOKEN` | Token de Snyk |
+| `SONAR_TOKEN` | Token de SonarCloud |
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | Credenciales AWS (con permisos sobre EKS) |
+| `PUSHGATEWAY_URL` | URL externa del Pushgateway (ej. `http://a1b2c3.elb.amazonaws.com:9091`) |
 
-### Convención de commits
+**Variables:**
 
-Formato: `tipo(alcance): descripcion-corta`. Escrito en **minúsculas y sin tildes**.
+| Nombre | Valor de ejemplo |
+| --- | --- |
+| `AWS_REGION` | `us-east-1` |
+| `EKS_CLUSTER_NAME` | `pagos-cluster` |
+| `SONAR_ORGANIZATION` | tu organización en SonarCloud |
+| `SONAR_PROJECT_KEY` | `Lucasmerc20_EP02-DEVOPS` |
 
-| Tipo | Para qué | Ejemplo |
-| --- | --- | --- |
-| `feat` | Nueva funcionalidad | `feat(ui): agregar pie de pagina` |
-| `fix` | Corrección de bug | `fix(home): corregir titulo` |
-| `docs` | Documentación | `docs: agregar changelog` |
-| `chore` | Tareas / CI | `chore(ci): agregar workflow hola mundo` |
+---
 
-### Naming de ramas
+## 5. Pipeline CI/CD
 
-`feature/<feature-name>` y `hotfix/<feature-name>`, en minúsculas y con guiones. Ejemplos: `feature/pagina-presentacion`, `hotfix/titulo-pagina`.
-
-### Flujo de merge
-
-- Las features y hotfix siempre entran por **pull request**, nunca con push directo a `main` o `develop`.
-- Se requiere al menos **1 aprobación** antes de fusionar; como este repo es en solitario, la aprueba el propio autor después de revisar la diff.
-- Uso merge commit o squash y **borro la rama** luego de fusionar.
-
-### Estrategia de revisión
-
-- El autor abre el PR y revisa la diff antes de fusionar.
-- En un equipo se asigna un revisor que comenta, aprueba o pide cambios; nunca se fusiona un PR sin revisar.
-- Antes de cada PR: confirmar que `mvn test` pasa y revisar la diff.
-
-> **Nota: repositorio en solitario (EP01).** Este encargo se desarrolló con una sola cuenta de GitHub, así que el rol de autor y revisor lo cumple la misma persona. El flujo completo (crear la rama desde su base, abrir el PR, revisar la diff, aprobar y fusionar) se hizo en cada cambio para validar las 2 features y el hotfix del indicador IE2.
-
-## Pipeline CI/CD (EP2)
-
-El pipeline está en `.github/workflows/pipeline.yml` y corre en cada push y pull request a `main` y `develop`.
+El pipeline está en `.github/workflows/pipeline.yml` y corre en cada push y pull request a
+`main` y `develop`.
 
 ```
 pruebas ──┐
-          ├──> construir ──> desplegar
+          ├──> construir ──> desplegar-eks ──> metricas
 seguridad ┘
 ```
 
-| Etapa | Qué hace |
+| Etapa | Qué hace | Si falla… |
+| --- | --- | --- |
+| `pruebas` | `mvn verify` (pruebas + cobertura JaCoCo ≥ 100 %). Luego **SonarCloud** con `qualitygate.wait=true`. | El pipeline se detiene. |
+| `seguridad` | **Snyk** analiza dependencias. Si hay vulnerabilidades altas/críticas falla. | El pipeline se detiene. |
+| `construir` | Construye la imagen Docker y la publica en **GHCR** con el SHA del commit. | No corre si fallan las anteriores. |
+| `desplegar-eks` | Conecta a EKS, aplica los manifiestos y espera el rollout. Verifica `/actuator/health`. | Solo corre en push. |
+| `metricas` | Publica en **Pushgateway**: tiempo de despliegue, cobertura, estado y vulnerabilidades. | No bloquea (es informativo). |
+
+`construir` solo corre si pasan `pruebas` y `seguridad`; `desplegar-eks` y `metricas` solo en push.
+
+---
+
+## 6. Métricas y dashboard (Grafana)
+
+El dashboard **"Pagos SVC - Observabilidad"** se provisiona automáticamente. Paneles:
+
+| Panel | Métrica Prometheus |
 | --- | --- |
-| `pruebas` | Ejecuta `mvn verify`. Si falla una prueba o la cobertura baja del 100 %, el pipeline se detiene. El reporte JaCoCo queda como artefacto. |
-| `seguridad` | Snyk revisa las dependencias. Si encuentra vulnerabilidades altas o críticas falla. |
-| `construir` | Construye la imagen Docker y la publica en GHCR con el SHA del commit como tag. |
-| `desplegar` | Levanta la imagen con Docker Compose en el runner y verifica `/actuator/health` en las 2 réplicas. |
+| Disponibilidad (up) | `up{namespace="pagos"}` |
+| Estado del último despliegue | `despliegue_estado{job="ci"}` |
+| Réplicas activas | `count(up{namespace="pagos"} == 1)` |
+| Uso de CPU | `rate(container_cpu_usage_seconds_total{...}[5m])` |
+| Uso de memoria | `container_memory_working_set_bytes{...}` |
+| Tasa de peticiones | `rate(http_server_requests_seconds_count{...}[5m])` |
+| Errores (HTTP 5xx) | `rate(http_server_requests_seconds_count{status=~"5.."}[5m])` |
+| Latencia p95 | `histogram_quantile(0.95, ...)` |
+| Tiempo de despliegue | `despliegue_duracion_segundos{job="ci"}` |
+| Cobertura de pruebas | `cobertura_porcentaje{job="ci"}` |
+| Vulnerabilidades bloqueadas | `snyk_vulnerabilidades{job="ci"}` |
+| Logs | Loki: `{namespace="pagos"}` |
 
-`construir` solo corre si pasan `pruebas` y `seguridad`, y `desplegar` solo corre en push (no en PR).
+Estas métricas permiten **tomar decisiones técnicas**: si la latencia o los errores suben, o si la
+cobertura baja, el equipo lo ve de inmediato y puede actuar antes de un problema mayor.
 
-### Contenedor
+---
 
-El `Dockerfile` es multi-stage: una etapa con Maven compila el jar y la final usa `eclipse-temurin:21-jre-alpine`, que es más liviana. Corre con un usuario sin privilegios y tiene `HEALTHCHECK`. El `.dockerignore` deja fuera `target/`, `.git/` y otros archivos que no se necesitan.
+## 7. Cumplimiento y seguridad (IE5 / IE6)
 
-### Seguridad
+- **SonarCloud**: análisis estático de calidad con *quality gate*. El pipeline espera el resultado
+  y se detiene si el gate no se cumple.
+- **Snyk**: detiene el pipeline ante vulnerabilidades altas o críticas.
+- **JaCoCo**: exige 100 % de cobertura; si baja, `mvn verify` falla.
+- **Branch protection** (en GitHub → Settings → Branches, sobre `main` y `develop`):
+  - Requerir pull request antes de fusionar.
+  - Requerir revisión/aprobación.
+  - Requerir que pasen los checks del pipeline.
+- **Auditoría automatizada** (`scripts/auditoria.sh`): busca secretos commiteados, verifica que la
+  imagen esté versionada y que Snyk, SonarCloud y Prometheus estén integrados.
 
-- **Dependabot** (`.github/dependabot.yml`): revisa semanalmente las dependencias de Maven y las actions, y abre PR hacia `develop`.
-- **Snyk**: corre en el pipeline con `--severity-threshold=high`.
-- **Política de bloqueo**: si Snyk encuentra una vulnerabilidad alta o crítica, la imagen no se construye y no se despliega hasta corregirla.
+### Demostración de detención del pipeline (IE6)
 
-Para que funcione hay que crear el secret `SNYK_TOKEN` en *Settings → Secrets and variables → Actions*.
+Ante una **falla crítica** (prueba rota, cobertura < 100 %, vulnerabilidad alta, o quality gate de
+SonarCloud en rojo), el job correspondiente termina en error y `construir`/`desplegar-eks` **no se
+ejecutan**, protegiendo el entorno productivo. Esto se puede demostrar introduciendo, por ejemplo,
+una vulnerabilidad en `pom.xml` o bajando la cobertura de una clase.
 
-### Orquestación y escalabilidad
+---
 
-`docker-compose.yml` define:
+## 8. Modelo de ramificación (GitFlow)
 
-- 2 réplicas del servicio (puertos 8080 y 8081).
-- Límite de 0.5 CPU y 512 MB de memoria por réplica (reserva de 0.25 CPU y 256 MB).
-- Healthcheck cada 30 s contra `/actuator/health`.
-- `restart: unless-stopped` para que se reinicie si se cae.
+Se mantiene el modelo elegido en la EP1:
 
-### Trazabilidad y calidad
+| Rama | Origen | Propósito | ¿Se borra? |
+| --- | --- | --- | --- |
+| `main` | inicial | Código estable, listo para producción | No |
+| `develop` | main | Integración de features | No |
+| `feature/<nombre>` | develop | Un cambio de funcionalidad | Sí, al fusionarse |
+| `hotfix/<nombre>` | main | Corrección urgente | Sí, al fusionarse |
 
-- Cada imagen se etiqueta con el SHA del commit (`ghcr.io/lucastapia20/pagos-svc:<sha>`), así se sabe exactamente qué código está desplegado.
-- El despliegue usa la misma imagen que se construyó, no se vuelve a compilar.
-- El job `desplegar` deja en el log el commit, la imagen, la rama y el estado de los contenedores.
-- Los cambios entran por ramas `feature/*` y pull request (GitFlow), y cada ejecución queda en la pestaña Actions.
-- La calidad se asegura con las pruebas, la cobertura del 100 % y el análisis de Snyk antes de desplegar.
+Convención de commits: `tipo(alcance): descripcion-corta` (minúsculas, sin tildes).
 
-## Declaración de uso de IA
+---
 
-Se usó Claude Code como apoyo para armar el Dockerfile, el pipeline, el docker-compose y este README. Todo fue revisado y probado por el equipo antes de subirlo. Normativa: https://bibliotecas.duoc.cl/ia
+## 9. Declaración de uso de IA
 
-## Conclusiones y reflexión personal
+Se utilizó **OpenCode (DeepSeek)** como apoyo para estructurar la arquitectura de observabilidad,
+generar los manifiestos de Kubernetes, los valores de Helm, el dashboard de Grafana, el pipeline
+y este README. Todo el contenido fue **revisado y validado por el equipo** antes de subirlo, y las
+conclusiones y reflexiones fueron redactadas **sin apoyo de IA**.
+Normativa: https://bibliotecas.duoc.cl/ia
 
-debido a falta de tiempo en lo personal se me hizo un trabajo algo complicado.
+---
+
+## 10. Conclusiones y reflexión personal
+
+> **Esta sección debe completarla cada integrante con sus propias palabras, sin uso de IA.**
+> Aquí va la reflexión individual sobre el aprendizaje (observabilidad, Kubernetes, métricas,
+> cumplimiento) y la contribución personal al proyecto.

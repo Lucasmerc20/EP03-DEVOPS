@@ -1,0 +1,205 @@
+name: Pipeline CI/CD
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+env:
+  # imagen versionada con el SHA del commit (trazabilidad)
+  IMAGEN: ghcr.io/${{ github.repository }}:${{ github.sha }}
+
+jobs:
+  pruebas:
+    name: Pruebas unitarias, cobertura y calidad
+    runs-on: ubuntu-latest
+    outputs:
+      cobertura: ${{ steps.cobertura.outputs.cobertura }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      # mvn verify falla si una prueba falla o si la cobertura baja del 100%
+      - name: Ejecutar pruebas
+        run: mvn -B verify
+
+      - name: Guardar reporte de cobertura
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reporte-jacoco
+          path: target/site/jacoco/
+
+      - name: Calcular cobertura
+        id: cobertura
+        if: always()
+        run: |
+          COBERTURA=$(awk -F',' 'NR>1 { m+=$8; c+=$9 } END { if (m+c>0) printf "%.2f", (c/(m+c))*100; else print "0" }' target/site/jacoco/jacoco.csv)
+          echo "Cobertura: ${COBERTURA}%"
+          echo "cobertura=${COBERTURA}" >> "$GITHUB_OUTPUT"
+
+      # SonarCloud: analisis de calidad. Con qualitygate.wait el job falla
+      # (y detiene el pipeline) si no se cumple el quality gate. (IE5 / IE6)
+      - name: Analisis de calidad (SonarCloud)
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          mvn -B sonar:sonar \
+            -Dsonar.host.url=https://sonarcloud.io \
+            -Dsonar.organization=${{ vars.SONAR_ORGANIZATION }} \
+            -Dsonar.projectKey=${{ vars.SONAR_PROJECT_KEY }} \
+            -Dsonar.coverage.jacoco.xmlReportPaths=target/site/jacoco/jacoco.xml \
+            -Dsonar.qualitygate.wait=true
+
+  seguridad:
+    name: Analisis de seguridad (Snyk)
+    runs-on: ubuntu-latest
+    outputs:
+      vulnerabilidades: ${{ steps.analisis.outputs.vulnerabilidades }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      # Si encuentra vulnerabilidades altas o criticas el job falla y bloquea el despliegue.
+      # Ademas expone el total para publicarlo en el dashboard.
+      - name: Escanear dependencias con Snyk
+        id: analisis
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: |
+          npm install -g snyk
+          snyk test --severity-threshold=high --json > snyk-report.json || true
+          VULNS=$(jq '[.vulnerabilities[]?] | length' snyk-report.json 2>/dev/null || echo 0)
+          echo "Vulnerabilidades altas/criticas: ${VULNS}"
+          echo "vulnerabilidades=${VULNS}" >> "$GITHUB_OUTPUT"
+          if [ "${VULNS}" -gt 0 ]; then
+            echo "::error::Se encontraron ${VULNS} vulnerabilidades altas/criticas. El pipeline se detiene."
+            exit 1
+          fi
+
+  construir:
+    name: Construir imagen Docker
+    needs: [pruebas, seguridad]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Construir imagen
+        run: docker build -t $IMAGEN .
+
+      - name: Login en GHCR
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publicar imagen
+        if: github.event_name == 'push'
+        run: docker push $IMAGEN
+
+  desplegar-eks:
+    name: Despliegue en Amazon EKS
+    needs: construir
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    outputs:
+      duracion: ${{ steps.registro.outputs.duracion }}
+      estado: ${{ steps.registro.outputs.estado }}
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configurar credenciales de AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Conectar al cluster EKS
+        run: aws eks update-kubeconfig --region ${{ vars.AWS_REGION }} --name ${{ vars.EKS_CLUSTER_NAME }}
+
+      - name: Login en GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Marcar inicio del despliegue
+        id: inicio
+        run: echo "start=$(date +%s)" >> "$GITHUB_OUTPUT"
+
+      - name: Aplicar manifiestos Kubernetes
+        run: |
+          sed -i "s/IMAGE_TAG_PLACEHOLDER/$GITHUB_SHA/g" k8s/deployment.yaml
+          kubectl apply -f k8s/namespace.yaml
+          kubectl apply -f k8s/deployment.yaml
+          kubectl apply -f k8s/service.yaml
+          kubectl apply -f k8s/service-monitor.yaml
+
+      - name: Esperar a que el despliegue quede listo
+        run: kubectl -n pagos rollout status deployment/pagos-svc --timeout=180s
+
+      - name: Verificar salud del servicio dentro del cluster
+        run: |
+          kubectl -n pagos run verificar-health --rm -i --restart=Never --image=curlimages/curl:latest -- \
+            curl -fsS http://pagos-svc:8080/actuator/health
+          kubectl -n pagos run verificar-api --rm -i --restart=Never --image=curlimages/curl:latest -- \
+            curl -fsS http://pagos-svc:8080/api/pagos
+
+      - name: Registrar metricas del despliegue
+        id: registro
+        if: always()
+        run: |
+          start=${{ steps.inicio.outputs.start }}
+          end=$(date +%s)
+          duracion=$((end - start))
+          if [ "${{ job.status }}" = "success" ]; then
+            estado=1
+          else
+            estado=0
+          fi
+          echo "Duracion del despliegue: ${duracion}s"
+          echo "duracion=${duracion}" >> "$GITHUB_OUTPUT"
+          echo "estado=${estado}" >> "$GITHUB_OUTPUT"
+
+  metricas:
+    name: Publicar metricas CI/CD al dashboard
+    needs: [pruebas, seguridad, desplegar-eks]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publicar metricas en Pushgateway
+        env:
+          PUSHGATEWAY_URL: ${{ secrets.PUSHGATEWAY_URL }}
+        run: |
+          if [ -z "$PUSHGATEWAY_URL" ]; then
+            echo "PUSHGATEWAY_URL no configurado; se omite la publicacion."
+            exit 0
+          fi
+          curl -fsS -X POST "$PUSHGATEWAY_URL/metrics/job/ci/instance/github-actions" --data-binary @- <<EOF
+          despliegue_duracion_segundos ${{ needs.desplegar-eks.outputs.duracion }}
+          cobertura_porcentaje ${{ needs.pruebas.outputs.cobertura }}
+          despliegue_estado ${{ needs.desplegar-eks.outputs.estado }}
+          snyk_vulnerabilidades ${{ needs.seguridad.outputs.vulnerabilidades }}
+          EOF
+          echo "Metricas publicadas correctamente."

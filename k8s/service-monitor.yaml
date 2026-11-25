@@ -1,0 +1,22 @@
+# ServiceMonitor: le indica a Prometheus (via kube-prometheus-stack)
+# que raspe las metricas de /actuator/prometheus de este microservicio.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: pagos-svc
+  namespace: pagos
+  labels:
+    app.kubernetes.io/name: pagos-svc
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pagos-svc
+  namespaceSelector:
+    matchNames:
+      - pagos
+  endpoints:
+    - port: http
+      path: /actuator/prometheus
+      interval: 15s
+      scrapeTimeout: 10s
