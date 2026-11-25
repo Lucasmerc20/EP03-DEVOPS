@@ -231,10 +231,9 @@ Convención de commits: `tipo(alcance): descripcion-corta` (minúsculas, sin til
 
 ## 9. Declaración de uso de IA
 
-Se utilizó **OpenCode (DeepSeek)** como apoyo para estructurar la arquitectura de observabilidad,
-generar los manifiestos de Kubernetes, los valores de Helm, el dashboard de Grafana, el pipeline
-y este README. Todo el contenido fue **revisado y validado por el equipo** antes de subirlo, y las
-conclusiones y reflexiones fueron redactadas **sin apoyo de IA**.
+Se utilizó **OpenCode (DeepSeek)** únicamente como guía para orientar el desarrollo del encargo y
+para la elaboración de los diagramas de arquitectura. El resto del trabajo fue desarrollado y
+validado por el equipo, y las conclusiones y reflexiones fueron redactadas **sin apoyo de IA**.
 Normativa: https://bibliotecas.duoc.cl/ia
 
 ---
