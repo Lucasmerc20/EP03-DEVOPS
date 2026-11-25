@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Stack de observabilidad del microservicio pagos-svc.
-# Requisitos: cluster EKS funcionando y kubectl apuntando a el.
+# Requisitos: cluster Kubernetes funcionando (EKS o minikube) y kubectl apuntando a el.
 set -euo pipefail
 
 NAMESPACE="monitoring"
@@ -14,7 +14,7 @@ helm repo update
 echo "==> Creando namespace ${NAMESPACE}"
 kubectl create namespace "${NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
 
-echo "==> Instalando kube-prometheus-stack (Prometheus + Grafana + Pushgateway)"
+echo "==> Instalando kube-prometheus-stack (Prometheus + Grafana)"
 helm upgrade --install prometheus prometheus-community/kube-prometheus-stack \
   --namespace "${NAMESPACE}" \
   --values kube-prometheus-stack-values.yaml \
@@ -25,8 +25,16 @@ helm upgrade --install loki grafana/loki-stack \
   --namespace "${NAMESPACE}" \
   --values loki-values.yaml
 
+echo "==> Instalando Pushgateway (metricas CI/CD)"
+helm upgrade --install pushgateway prometheus-community/prometheus-pushgateway \
+  --namespace "${NAMESPACE}" \
+  --wait
+
 echo "==> Registrando datasource de Loki en Grafana"
 kubectl apply -f loki-datasource.yaml
+
+echo "==> Registrando ServiceMonitor del Pushgateway"
+kubectl apply -f pushgateway-service-monitor.yaml
 
 echo "==> Provisionando dashboard personalizado en Grafana"
 kubectl create configmap pagos-dashboard \
@@ -37,8 +45,9 @@ kubectl label configmap pagos-dashboard -n "${NAMESPACE}" grafana_dashboard="1" 
 
 echo ""
 echo "==> Listo. Accesos:"
-echo "Grafana:     kubectl -n ${NAMESPACE} get svc prometheus-grafana"
-echo "Pushgateway: kubectl -n ${NAMESPACE} get svc prometheus-prometheus-pushgateway"
+echo "Grafana:     kubectl -n ${NAMESPACE} port-forward svc/prometheus-grafana 3000:80"
+echo "             (http://localhost:3000  usuario: admin  contrasena: admin)"
+echo "Pushgateway: kubectl -n ${NAMESPACE} get svc pushgateway-prometheus-pushgateway"
 echo ""
 echo "IMPORTANTE: copia la URL externa del pushgateway (LoadBalancer) al secret"
 echo "PUSHGATEWAY_URL del repositorio para que el pipeline pueda publicar las"

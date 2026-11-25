@@ -1,5 +1,7 @@
-# Stack de monitoreo: Prometheus + Grafana + Pushgateway (kube-prometheus-stack)
+# Stack de monitoreo: Prometheus + Grafana (kube-prometheus-stack).
 # Se instala con: observability/setup-observabilidad.sh
+# NOTA: el Pushgateway ya NO viene incluido en este chart; se instala aparte
+# (ver setup-observabilidad.sh) con el chart prometheus-community/prometheus-pushgateway.
 
 grafana:
   enabled: true
@@ -15,9 +17,10 @@ grafana:
     datasources:
       enabled: true
 
-# Pushgateway: recibe las metricas de CI/CD (tiempo de despliegue, cobertura)
-# que empuja GitHub Actions al terminar el pipeline.
-prometheus-pushgateway:
-  enabled: true
-  service:
-    type: LoadBalancer
+# Componentes no necesarios para el demo: se deshabilitan para ahorrar recursos
+# (importante en minikube con memoria limitada).
+alertmanager:
+  enabled: false
+
+prometheus-node-exporter:
+  enabled: false

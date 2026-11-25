@@ -1,0 +1,21 @@
+# ServiceMonitor del Pushgateway: hace que Prometheus raspe las metricas
+# de CI/CD (tiempo de despliegue, cobertura, estado) publicadas por GitHub Actions.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: pushgateway
+  namespace: monitoring
+  labels:
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: prometheus-pushgateway
+  namespaceSelector:
+    matchNames:
+      - monitoring
+  endpoints:
+    - port: http
+      interval: 15s
+      # preserva el label 'job' que publica el cliente (job=ci)
+      honorLabels: true

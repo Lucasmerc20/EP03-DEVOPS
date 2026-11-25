@@ -59,7 +59,7 @@ flowchart LR
 | Monitoreo (métricas) | **Micrometer + Prometheus** | IE1 |
 | Logging | **Loki + Promtail** | IE1 |
 | Dashboard | **Grafana** (dashboard personalizado) | IE3 |
-| Orquestación | **Amazon EKS** (Kubernetes) | IE2 |
+| Orquestación | **Kubernetes** (minikube local / Amazon EKS en nube) | IE2 |
 | Métricas CI/CD | **Prometheus Pushgateway** | IE3 |
 | Calidad | **SonarCloud** (quality gate) | IE5 / IE6 |
 | Seguridad | **Snyk** (vulnerabilidades) | IE6 |
@@ -88,14 +88,45 @@ docker compose up --build -d
 Levanta 2 réplicas (puertos 8080 y 8081). El endpoint de métricas queda en
 `http://localhost:8080/actuator/prometheus`.
 
-### 4.2 Crear el cluster EKS
+### 4.2 Entorno simulado con minikube (recomendado para el demo)
+
+Ruta local y gratuita que usa **Kubernetes en minikube** (driver de Docker). Es el camino
+más directo para demostrar la EP3 sin depender de la nube.
+
+```bash
+# 1) levantar el cluster local
+minikube start --driver=docker --cpus=2 --memory=4096
+
+# 2) construir la imagen y cargarla en minikube
+docker build -t pagos-svc:local .
+minikube image load pagos-svc:local
+
+# 3) desplegar el microservicio (usa la imagen local)
+kubectl apply -f k8s/namespace.yaml
+kubectl apply -f k8s/deployment-local.yaml
+kubectl apply -f k8s/service.yaml
+kubectl apply -f k8s/service-monitor.yaml
+
+# 4) instalar el stack de observabilidad (Prometheus + Grafana + Loki + Pushgateway)
+cd observability
+./setup-observabilidad.sh
+```
+
+Acceder al dashboard (Grafana):
+
+```bash
+kubectl -n monitoring port-forward svc/prometheus-grafana 3000:80
+# abrir http://localhost:3000  (usuario: admin / contraseña: admin)
+```
+
+### 4.3 Crear el cluster EKS (nube, opcional)
 
 ```bash
 cd infra
 ./setup-eks.sh
 ```
 
-### 4.3 Desplegar el microservicio en EKS
+### 4.4 Desplegar el microservicio en EKS
 
 ```bash
 # reemplaza el tag por uno real publicado en GHCR
@@ -110,18 +141,18 @@ kubectl apply -f k8s/service-monitor.yaml
 > puedan descargarla, haz público el paquete en *GitHub → Packages → Package settings → Change
 > visibility → Public*, o crea un `imagePullSecrets` llamado `ghcr-secret`.
 
-### 4.4 Instalar el stack de observabilidad
+### 4.5 Instalar el stack de observabilidad
 
 ```bash
 cd observability
 ./setup-observabilidad.sh
 ```
 
-Esto instala (vía Helm) **kube-prometheus-stack** (Prometheus + Grafana + Pushgateway) y
-**loki-stack** (Loki + Promtail), registra el datasource de Loki y provisiona el dashboard
-personalizado en Grafana.
+Esto instala (vía Helm) **kube-prometheus-stack** (Prometheus + Grafana), **loki-stack**
+(Loki + Promtail) y el **Pushgateway** (chart aparte), registra el datasource de Loki y
+provisiona el dashboard personalizado en Grafana.
 
-### 4.5 Configurar secretos y variables en GitHub
+### 4.6 Configurar secretos y variables en GitHub
 
 En *Settings → Secrets and variables → Actions*:
 

@@ -6,11 +6,6 @@ loki:
 
 promtail:
   enabled: true
-  # promtail recolecta los logs de los contenedores en /var/log/pods
-  config:
-    snippets:
-      pipelineStages:
-        - docker: {}
 
 # Grafana ya viene con kube-prometheus-stack, no se instala aqui
 grafana:
