@@ -223,7 +223,28 @@ cobertura baja, el equipo lo ve de inmediato y puede actuar antes de un problema
 
 ---
 
-## 7. Cumplimiento y seguridad (IE5 / IE6)
+## 7. Verificación de funcionamiento
+
+El entorno completo se probó de punta a punta con **minikube** (Kubernetes v1.37) y se verificaron
+los siguientes resultados:
+
+| Componente | Resultado verificado |
+| --- | --- |
+| Microservicio `pagos-svc` (2 réplicas) | `Running`, `/actuator/health` → `{"status":"UP"}` |
+| Métricas Prometheus | `/actuator/prometheus` expone métricas con `application="pagos"` |
+| Prometheus → microservicio | 2 targets con `up=1` (ambas réplicas monitoreadas) |
+| Métricas de recursos | `container_cpu_usage_seconds_total` y `container_memory_working_set_bytes` disponibles |
+| Tráfico HTTP | `http_server_requests_seconds_count` registrando peticiones (req/s) |
+| Logs | Loki + Promtail capturando los logs del microservicio (`{namespace="pagos"}`) |
+| Dashboard | "Pagos SVC - Observabilidad" cargado en Grafana y funcionando |
+| Métricas CI/CD | Pushgateway recibiendo `despliegue_duracion_segundos`, `cobertura_porcentaje`, `despliegue_estado` y `snyk_vulnerabilidades` |
+
+Esto comprueba la **trazabilidad completa** del microservicio en ejecución: métricas, errores,
+disponibilidad y logs, integrados en un único dashboard para apoyar la toma de decisiones.
+
+---
+
+## 8. Cumplimiento y seguridad (IE5 / IE6)
 
 - **SonarCloud**: análisis estático de calidad con *quality gate*. El pipeline espera el resultado
   y se detiene si el gate no se cumple.
@@ -245,7 +266,7 @@ una vulnerabilidad en `pom.xml` o bajando la cobertura de una clase.
 
 ---
 
-## 8. Modelo de ramificación (GitFlow)
+## 9. Modelo de ramificación (GitFlow)
 
 Se mantiene el modelo elegido en la EP1:
 
@@ -260,7 +281,7 @@ Convención de commits: `tipo(alcance): descripcion-corta` (minúsculas, sin til
 
 ---
 
-## 9. Declaración de uso de IA
+## 10. Declaración de uso de IA
 
 Se utilizó **OpenCode (DeepSeek)** únicamente como guía para orientar el desarrollo del encargo y
 para la elaboración de los diagramas de arquitectura. El resto del trabajo fue desarrollado y
@@ -269,6 +290,6 @@ Normativa: https://bibliotecas.duoc.cl/ia
 
 ---
 
-## 10. Conclusiones y reflexión personal
+## 11. Conclusiones y reflexión personal
 
 Fue un desafío muy interesante y trabajado, sinceramente sin ayuda no se habría conseguido.
