@@ -240,6 +240,4 @@ Normativa: https://bibliotecas.duoc.cl/ia
 
 ## 10. Conclusiones y reflexión personal
 
-> **Esta sección debe completarla cada integrante con sus propias palabras, sin uso de IA.**
-> Aquí va la reflexión individual sobre el aprendizaje (observabilidad, Kubernetes, métricas,
-> cumplimiento) y la contribución personal al proyecto.
+Fue un desafío muy interesante y trabajado, sinceramente sin ayuda no se habría conseguido.
